@@ -412,7 +412,7 @@ impl<'a> SolidityGenerator<'a> {
             self.vk.cs(),
             &self.meta,
             &dummy_data,
-            vk_lookup_const_table_dummy,
+            vk_lookup_const_table_dummy.clone(),
         );
 
         // Fill in the quotient eval computations with dummy values. (maintains the correct shape)
@@ -555,13 +555,13 @@ impl<'a> SolidityGenerator<'a> {
         };
 
         // Now generate the real vk_mptr with a vk that has the correct length
-        let vk_mptr = self.estimate_static_working_memory_size(
-            &VerifyingCache::Artifact(&vk),
-            Ptr::calldata(0x84),
-        );
+        // let vk_mptr = self.estimate_static_working_memory_size(
+        //     &VerifyingCache::Artifact(&vk),
+        //     Ptr::calldata(0x84),
+        // );
 
         // replace the mock vk_mptr with the real vk_mptr
-        set_constant_value(&mut vk.constants, "vk_mptr", U256::from(vk_mptr));
+        set_constant_value(&mut vk.constants, "vk_mptr", U256::from(vk_mptr_mock));
         // replace the mock vk_len with the real vk_len
         let vk_len = vk.len(true);
         set_constant_value(&mut vk.constants, "vk_len", U256::from(vk_len));
@@ -570,37 +570,37 @@ impl<'a> SolidityGenerator<'a> {
         let data = Data::new(
             &self.meta,
             &VerifyingCache::Artifact(&vk),
-            Ptr::memory(vk_mptr),
+            Ptr::memory(vk_mptr_mock),
             Ptr::calldata(0x84),
         );
 
         // Regenerate the gate computations with the correct offsets.
-        let mut vk_lookup_const_table: HashMap<ruint::Uint<256, 4>, Ptr> = HashMap::new();
+        // let mut vk_lookup_const_table: HashMap<ruint::Uint<256, 4>, Ptr> = HashMap::new();
 
         // create a hashmap of vk.const_expressions values to its vk memory location.
-        let offset = vk_mptr
-            + (vk.constants.len() * 0x20)
-            + (vk.fixed_comms.len() + vk.permutation_comms.len()) * 0x40;
+        // let offset = vk_mptr_mock
+        //     + (vk.constants.len() * 0x20)
+        //     + (vk.fixed_comms.len() + vk.permutation_comms.len()) * 0x40;
 
         // keys to the map are the values of vk.const_expressions and values are the memory location of the vk.const_expressions.
-        vk.const_expressions
-            .iter()
-            .enumerate()
-            .for_each(|(idx, _)| {
-                let mptr = offset + (0x20 * idx);
-                let mptr = Ptr::memory(mptr);
-                vk_lookup_const_table.insert(vk.const_expressions[idx], mptr);
-            });
+        // vk.const_expressions
+        //     .iter()
+        //     .enumerate()
+        //     .for_each(|(idx, _)| {
+        //         let mptr = offset + (0x20 * idx);
+        //         let mptr = Ptr::memory(mptr);
+        //         vk_lookup_const_table.insert(vk.const_expressions[idx], mptr);
+        //     });
 
         // Now we initalize the real evaluator_vk which will contain the correct offsets in the vk_lookup_const_table.
         let evaluator =
-            EvaluatorDynamic::new(self.vk.cs(), &self.meta, &data, vk_lookup_const_table);
+            EvaluatorDynamic::new(self.vk.cs(), &self.meta, &data, vk_lookup_const_table_dummy);
 
         // NOTE: We don't need to replace the gate_computations_total_length since we are only potentially modifying the offsets for each constant mload operation.
         vk.gate_computations = evaluator.gate_computations();
         // We need to replace the lookup_computations so that the constant mptrs in the encoded input expessions have the correct offsets.
         vk.lookup_computations =
-            evaluator.lookup_computations(vk_mptr + lookup_computations_len_offset);
+            evaluator.lookup_computations(vk_mptr_mock + lookup_computations_len_offset);
         vk
     }
 

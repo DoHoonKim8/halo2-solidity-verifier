@@ -631,7 +631,6 @@ where
         let gate_computation_longest = chain![packed_expression_words]
             .max_by_key(|x| x.len())
             .unwrap()
-            .clone()
             .len();
         gate_computation_longest * 0x20
     }

@@ -49,7 +49,9 @@ pub(crate) struct ConstraintSystemMeta {
     pub(crate) num_evals: usize,
     pub(crate) num_user_advices: Vec<usize>,
     pub(crate) num_user_challenges: Vec<usize>,
+    /// index of each advice column after columns are sorted according to their phase
     pub(crate) advice_indices: Vec<usize>,
+    /// index of each challenge after challenges are sorted according to their phase
     pub(crate) challenge_indices: Vec<usize>,
     pub(crate) rotation_last: i32,
 }
