@@ -180,10 +180,8 @@ pub(crate) fn rotation_sets(queries: &[Query]) -> (BTreeSet<i32>, Vec<RotationSe
                     .position(|set| itertools::equal(&set.rots, queries.keys()))
                 {
                     let set = &mut sets[pos];
-                    if !set.comms.contains(&comm) {
-                        set.comms.push(comm);
-                        set.evals.push(queries.into_values().collect_vec());
-                    }
+                    set.comms.push(comm);
+                    set.evals.push(queries.into_values().collect_vec());
                 } else {
                     let diffs = BTreeSet::from_iter(
                         superset

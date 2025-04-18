@@ -363,9 +363,9 @@ impl<'a> SolidityGenerator<'a> {
             .collect();
 
         Halo2VerifyingKey {
-            constants: constants.clone(),
-            fixed_comms: fixed_comms.clone(),
-            permutation_comms: permutation_comms.clone(),
+            constants,
+            fixed_comms,
+            permutation_comms,
         }
     }
 
@@ -428,11 +428,11 @@ impl<'a> SolidityGenerator<'a> {
         let num_advices = self.meta.num_advices();
         let num_user_challenges = self.meta.num_challenges();
         // truncate the last elements of num_user_challenges to match the length of num_advices.
-        let num_user_challenges = num_user_challenges
-            .iter()
-            .take(num_advices.len())
-            .copied()
-            .collect::<Vec<_>>();
+        // let num_user_challenges = num_user_challenges
+        //     .iter()
+        //     .take(num_advices.len())
+        //     .copied()
+        //     .collect::<Vec<_>>();
 
         let mut fsm_challenges = 0x20 * (1 + self.num_instances); // initialize fsm_challenges with the space that loading the instances into memory will take up.
         let mut max_advices_value = 0; // Initialize variable to track the maximum value of *num_advices * 0x40
@@ -554,12 +554,6 @@ impl<'a> SolidityGenerator<'a> {
             pcs_computations: pcs_computations_dummy,
         };
 
-        // Now generate the real vk_mptr with a vk that has the correct length
-        // let vk_mptr = self.estimate_static_working_memory_size(
-        //     &VerifyingCache::Artifact(&vk),
-        //     Ptr::calldata(0x84),
-        // );
-
         // replace the mock vk_mptr with the real vk_mptr
         set_constant_value(&mut vk.constants, "vk_mptr", U256::from(vk_mptr_mock));
         // replace the mock vk_len with the real vk_len
@@ -573,24 +567,6 @@ impl<'a> SolidityGenerator<'a> {
             Ptr::memory(vk_mptr_mock),
             Ptr::calldata(0x84),
         );
-
-        // Regenerate the gate computations with the correct offsets.
-        // let mut vk_lookup_const_table: HashMap<ruint::Uint<256, 4>, Ptr> = HashMap::new();
-
-        // create a hashmap of vk.const_expressions values to its vk memory location.
-        // let offset = vk_mptr_mock
-        //     + (vk.constants.len() * 0x20)
-        //     + (vk.fixed_comms.len() + vk.permutation_comms.len()) * 0x40;
-
-        // keys to the map are the values of vk.const_expressions and values are the memory location of the vk.const_expressions.
-        // vk.const_expressions
-        //     .iter()
-        //     .enumerate()
-        //     .for_each(|(idx, _)| {
-        //         let mptr = offset + (0x20 * idx);
-        //         let mptr = Ptr::memory(mptr);
-        //         vk_lookup_const_table.insert(vk.const_expressions[idx], mptr);
-        //     });
 
         // Now we initalize the real evaluator_vk which will contain the correct offsets in the vk_lookup_const_table.
         let evaluator =

@@ -47,7 +47,9 @@ pub(crate) struct ConstraintSystemMeta {
     pub(crate) advice_queries: Vec<(usize, i32)>,
     pub(crate) fixed_queries: Vec<(usize, i32)>,
     pub(crate) num_evals: usize,
+    /// represents the mapping from phase -> (number of columns that are in the phase)
     pub(crate) num_user_advices: Vec<usize>,
+    /// represents the mapping from phase -> (number of challenges for the phase)
     pub(crate) num_user_challenges: Vec<usize>,
     /// index of each advice column after columns are sorted according to their phase
     pub(crate) advice_indices: Vec<usize>,
