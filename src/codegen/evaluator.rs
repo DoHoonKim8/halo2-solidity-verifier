@@ -1177,6 +1177,7 @@ where
         *self.static_mem_ptr.borrow_mut() = value;
     }
 
+    /// returns (vector of encoded expressions, the position of encoded expression inside fixed static memory area)
     fn evaluate_encode(&self, expression: &Expression<F>) -> (Vec<U256>, U256) {
         evaluate(
             expression,

@@ -426,7 +426,7 @@ impl<'a> SolidityGenerator<'a> {
         };
 
         let num_advices = self.meta.num_advices();
-        let num_user_challenges = self.meta.num_challenges();
+        let num_challenges = self.meta.num_challenges();
         // truncate the last elements of num_user_challenges to match the length of num_advices.
         // let num_user_challenges = num_user_challenges
         //     .iter()
@@ -442,7 +442,7 @@ impl<'a> SolidityGenerator<'a> {
             let mut bit_counter = 8;
             let mut last_idx = 0;
             for (num_advices, num_user_challenges) in
-                num_advices.iter().zip(num_user_challenges.iter())
+                num_advices.iter().zip(num_challenges.iter())
             {
                 let offset = 24;
                 let next_bit_counter = bit_counter + offset;
