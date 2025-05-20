@@ -718,7 +718,7 @@ pub(crate) fn bdfg21_computations_dynamic(
             let mut packed_words: Vec<U256> = vec![U256::from(0)];
             let mut bit_counter = 8;
             let points_len = points.len();
-            // assert that points_len is less than 256 bits so that it fits into 1 byte.
+            // assert that points_len is less than 256 so that it fits into 1 byte.
             assert!(points_len < 256);
             if let Some(interm_point) = interm_point {
                 packed_words[0] |= interm_point;
