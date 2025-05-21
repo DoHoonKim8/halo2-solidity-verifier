@@ -185,17 +185,23 @@ contract Halo2VerifierReusable {
                 let l_blind := mload(add(theta_mptr, 0x1e0))
                 let i_eval := mload(add(theta_mptr, 0x220))
                 // Extract the index 1 and index 0 z evaluations from the z word. 
+                // Z_{P,a}(\omega x)
                 let lhs := calldataload(and(shr(16,z), PTR_BITMASK)) 
+                // Z_{P,a}(x)
                 let rhs := calldataload(and(z, PTR_BITMASK)) 
                 z := shr(48, z)  
                 // loop through the word_len_chunk
                 for { let j := 0 } lt(j, num_words) { j := add(j, 0x20) } {
                     for { } z { } {
                         let eval := i_eval
+                        // Advice / Fixed query
                         if eq(and(z, BYTE_FLAG_BITMASK), 0x00) {
+                            // v_i(x) on stack
                             eval := calldataload(and(shr(8, z), PTR_BITMASK))
                         }
+                        // lhs *= (v_i(x) + \beta \cdot s_i(x) + \gamma)
                         lhs := mulmod(lhs, addmod(addmod(eval, mulmod(beta, calldataload(and(shr(24, z), PTR_BITMASK)), R), R), gamma, R), R)
+                        // rhs *= (v_i(x) + \beta \cdot \delta^i \cdot x + \gamma)
                         rhs := mulmod(rhs, addmod(addmod(eval, mload(0x00), R), gamma, R), R)
                         z := shr(40, z)
                         mstore(0x00, mulmod(mload(0x00), DELTA, R))
@@ -204,23 +210,27 @@ contract Halo2VerifierReusable {
                 }
                 let left_sub_right := addmod(lhs, sub(R, rhs), R)
                 let fsm_ptr := mload(0x20)
+                // store ((1 - (l_{last}(x) + l_{blind}(x))) \cdot (lhs - rhs)) to `fsm_ptr`
                 mstore(fsm_ptr, addmod(left_sub_right, sub(R, mulmod(left_sub_right, addmod(l_last, l_blind, R), R)), R))
                 mstore(0x20, add(fsm_ptr,0x20))
             }
 
             function z_evals(z, num_words_packed, perm_z_last_ptr, permutation_z_evals_ptr, theta_mptr, l_0, y, quotient_eval_numer) -> ret {
-                let num_words := and(num_words_packed, PTR_BITMASK)
+                let num_words := and(num_words_packed, PTR_BITMASK) // the number of words for permutation chunks except the last one
                 // Initialize the free static memory pointer to store the column evals.
                 mstore(0x20, 0x40)
                 // Iterate through the tuple window length ( permutation_z_evals_len.len() - 1 ) offset by one word.
                 for { } lt(permutation_z_evals_ptr, perm_z_last_ptr) { } {
                     let next_z_ptr := add(permutation_z_evals_ptr, num_words)
-                    let z_j := mload(next_z_ptr)
+                    let z_j := mload(next_z_ptr) // next chunk
+                    // l_0(x) \cdot (Z_{P,a}(X) - Z_{P,a-1}(\omega^u X)) = 0
                     quotient_eval_numer := addmod(
                         mulmod(quotient_eval_numer, y, R),
                         mulmod(l_0, addmod(calldataload(and(z_j, PTR_BITMASK)), sub(R, calldataload(and(shr(32,z), PTR_BITMASK))), R), R), 
                         R
                     )
+                    // product rule within permutation chunk
+                    // z: the permutation chunk word
                     col_evals(z, num_words, permutation_z_evals_ptr, theta_mptr)
                     permutation_z_evals_ptr := next_z_ptr
                     z := z_j
@@ -827,7 +837,7 @@ contract Halo2VerifierReusable {
             {
                 // Load in the vk_digest, vk_mptr and vk_len and the rest of the constants needed for the 
                 // challenge data generation process.
-                extcodecopy(vk, 0x0, 0x00, 0x240)
+                extcodecopy(vk, 0x0, 0x00, 0x220)
                 // Set the vk_mptr 
                 vk_mptr := mload(0x20)
                 let vk_len := mload(0x40)
@@ -868,12 +878,14 @@ contract Halo2VerifierReusable {
                 }
                 
                 for { let i := 0 } lt(i, num_words) { i := add(i, 1) } {
-                    challenge_len_ptr := add(challenge_len_ptr, 0x20)
+                    // loops until challenge_len_data becomes 0 -> this seems vague termination
+                    // what happens if the valid data ends 8 bits behind the MSG byte of the words?
                     for { } challenge_len_data { } {
                         // add proof_cpt to num advices len
                         let proof_cptr_end := add(proof_cptr, and(challenge_len_data, PTR_BITMASK))
                         challenge_len_data := shr(16, challenge_len_data)
                         // Phase loop
+                        // read advice commitments for each phase
                         for { } lt(proof_cptr, proof_cptr_end) { } {
                             success, proof_cptr, hash_mptr := read_ec_point(success, proof_cptr, hash_mptr)
                         }
@@ -887,6 +899,7 @@ contract Halo2VerifierReusable {
                             challenge_mptr := squeeze_challenge_cont(challenge_mptr)
                         }
                     }
+                    challenge_len_ptr := add(challenge_len_ptr, 0x20)
                     challenge_len_data := mload(challenge_len_ptr)
                 }
 
@@ -1079,7 +1092,7 @@ contract Halo2VerifierReusable {
                 {
                     // Permutation computations
                     let permutation_z_evals_ptr := add(vk_mptr, mload(add(vk_mptr, {{ vk_const_offsets["permutation_computations_len_offset"]|hex() }})))
-                    let permutation_z_evals := mload(permutation_z_evals_ptr)
+                    let permutation_z_evals := mload(permutation_z_evals_ptr) // loads meta data
                     // Last idx of permutation evals == permutation_evals.len() - 1
                     let last_idx := and(permutation_z_evals, BYTE_FLAG_BITMASK)
                     permutation_z_evals := shr(8, permutation_z_evals)
@@ -1089,10 +1102,11 @@ contract Halo2VerifierReusable {
                     let num_words := and(permutation_z_evals, 0xFFFFFFFF)
                     permutation_z_evals := shr(32, permutation_z_evals)
                     permutation_z_evals_ptr := add(permutation_z_evals_ptr, 0x20)
-                    permutation_z_evals := mload(permutation_z_evals_ptr)
+                    permutation_z_evals := mload(permutation_z_evals_ptr) // loads the first permutation computations word
                     let l_0 := mload(add(theta_mptr, 0x200))
                     {            
                         // Get the first and second LSG bytes from the first permutation_z_evals word to load in (z, _, _)
+                        // first permutation chunk check: l_0(x) \cdot (1 - Z_{P,0}(x)) = 0
                         let eval := addmod(l_0, sub(R, mulmod(l_0, calldataload(and(permutation_z_evals, PTR_BITMASK)), R)), R)
                         quotient_eval_numer := addmod(mulmod(quotient_eval_numer, y, R), eval, R)
                     }
@@ -1100,10 +1114,12 @@ contract Halo2VerifierReusable {
                     {   
                         // Load in the last permutation_z_evals word
                         let perm_z_last_ptr := add(mul(last_idx, and(num_words, PTR_BITMASK)), permutation_z_evals_ptr)
-                        let perm_z_last := calldataload(and(mload(perm_z_last_ptr), PTR_BITMASK))
+                        let perm_z_last := calldataload(and(mload(perm_z_last_ptr), PTR_BITMASK)) // Z_{P, b-1}(x)
+                        // l_{last}(x) \cdot (Z_{P, b-1}(x)^2 - Z_{P, b-1}(x)) = 0
                         quotient_eval_numer := addmod(
                             mulmod(quotient_eval_numer, y, R), 
                             mulmod(
+                                // l_{last}(x)
                                 mload(add(theta_mptr, 0x1C0)), 
                                 addmod(
                                     mulmod(perm_z_last, perm_z_last, R), 
@@ -1115,13 +1131,19 @@ contract Halo2VerifierReusable {
                             R
                         )
 
+                        // store (\beta \cdot x) into 0x00
                         mstore(0x00, mulmod(mload(add(theta_mptr, 0x20)), mload(add(theta_mptr, 0x80)), R))
 
+                        // remaining rules:
+                        // 1) product rules within permutation chunk
+                        // 2) subsequent permutation chunks
                         quotient_eval_numer := z_evals(
-                            permutation_z_evals, 
-                            num_words, 
-                            perm_z_last_ptr, 
-                            permutation_z_evals_ptr, 
+                            permutation_z_evals, // the first permutation computations word on stack
+                            num_words,
+                            // 1, 2 LSG bytes -> number of words for permutation chunks except last one
+                            // 3, 4 LSG bytes -> number of words for the last permutation chunk
+                            perm_z_last_ptr, // pointer to the last permutation chunk words
+                            permutation_z_evals_ptr, // pointer to the first permutation chunk words
                             theta_mptr,
                             l_0,
                             y, 
