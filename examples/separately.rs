@@ -7,7 +7,7 @@ use halo2_solidity_verifier::{
     SolidityGenerator,
 };
 
-const K_RANGE: Range<u32> = 10..17;
+const K_RANGE: Range<u32> = 13..14;
 
 fn main() {
     let mut rng = seeded_std_rng();
@@ -112,7 +112,6 @@ fn create_proof_checked(
         )
     };
     assert!(result.is_ok());
-
     proof
 }
 
@@ -240,5 +239,218 @@ mod prelude {
 
     pub fn seeded_std_rng() -> impl RngCore {
         StdRng::seed_from_u64(OsRng.next_u64())
+    }
+}
+
+mod rotation_tests {
+    use halo2_proofs::{
+        circuit::*,
+        dev::MockProver,
+        halo2curves::{
+            bn256::{Bn256, Fr},
+            ff::Field,
+        },
+        plonk::*,
+        poly::{kzg::commitment::ParamsKZG, Rotation},
+    };
+    use itertools::Itertools;
+    use std::{
+        fs::{create_dir_all, File},
+        io::Write,
+        marker::PhantomData,
+    };
+
+    use halo2_solidity_verifier::{compile_solidity, encode_calldata, Evm, SolidityGenerator};
+
+    use crate::{create_proof_checked, prelude::seeded_std_rng};
+
+    #[derive(Debug, Clone)]
+    struct FactorialConfig {
+        advice: Column<Advice>,
+        selector: Selector,
+        instance: Column<Instance>,
+    }
+
+    #[derive(Debug, Clone)]
+    struct FactorialChip<F: Field> {
+        config: FactorialConfig,
+        _marker: PhantomData<F>,
+    }
+
+    impl<F: Field> FactorialChip<F> {
+        pub fn construct(config: FactorialConfig) -> Self {
+            Self {
+                config,
+                _marker: PhantomData,
+            }
+        }
+
+        pub fn configure(
+            meta: &mut ConstraintSystem<F>,
+            advice: Column<Advice>,
+            instance: Column<Instance>,
+        ) -> FactorialConfig {
+            let selector = meta.selector();
+
+            meta.enable_equality(advice);
+            meta.enable_equality(instance);
+
+            meta.create_gate("add", |meta| {
+                //
+                // advice | selector
+                //   a    |
+                //   b    |    s
+                //   c    |
+                //
+                let s = meta.query_selector(selector);
+                let a = meta.query_advice(advice, Rotation::prev());
+                let b = meta.query_advice(advice, Rotation::cur());
+                let c = meta.query_advice(advice, Rotation::next());
+                vec![s * (c - a * b)]
+            });
+
+            FactorialConfig {
+                advice,
+                selector,
+                instance,
+            }
+        }
+
+        pub fn assign(
+            &self,
+            mut layouter: impl Layouter<F>,
+            nrows: usize,
+        ) -> Result<AssignedCell<F, F>, Error> {
+            layouter.assign_region(
+                || "factorial",
+                |mut region| {
+                    let mut a_cell = region.assign_advice_from_instance(
+                        || "",
+                        self.config.instance,
+                        0,
+                        self.config.advice,
+                        0,
+                    )?;
+
+                    let mut b_cell = region.assign_advice_from_instance(
+                        || "",
+                        self.config.instance,
+                        1,
+                        self.config.advice,
+                        1,
+                    )?;
+
+                    for row in 1..nrows - 1 {
+                        self.config.selector.enable(&mut region, row)?;
+                        let c_cell = region.assign_advice(
+                            || "advice",
+                            self.config.advice,
+                            row + 1,
+                            || a_cell.value().copied() * b_cell.value(),
+                        )?;
+
+                        a_cell = b_cell;
+                        b_cell = c_cell;
+                    }
+
+                    Ok(b_cell)
+                },
+            )
+        }
+
+        pub fn expose_public(
+            &self,
+            mut layouter: impl Layouter<F>,
+            cell: AssignedCell<F, F>,
+            row: usize,
+        ) -> Result<(), Error> {
+            layouter.constrain_instance(cell.cell(), self.config.instance, row)
+        }
+    }
+
+    #[derive(Default)]
+    struct MyCircuit<F>(PhantomData<F>);
+
+    impl<F: Field> Circuit<F> for MyCircuit<F> {
+        type Config = FactorialConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+
+        fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
+            let advice = meta.advice_column();
+            let instance = meta.instance_column();
+            FactorialChip::configure(meta, advice, instance)
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<F>,
+        ) -> Result<(), Error> {
+            let chip = FactorialChip::construct(config);
+
+            let nrows = 7;
+            let out_cell = chip.assign(layouter.namespace(|| "entire table"), nrows)?;
+
+            chip.expose_public(layouter.namespace(|| "out"), out_cell, 2)?;
+
+            Ok(())
+        }
+    }
+
+    fn save_solidity(name: impl AsRef<str>, solidity: &str) {
+        const DIR_GENERATED: &str = "./generated";
+
+        create_dir_all(DIR_GENERATED).unwrap();
+        File::create(format!("{DIR_GENERATED}/{}", name.as_ref()))
+            .unwrap()
+            .write_all(solidity.as_bytes())
+            .unwrap();
+    }
+
+    #[test]
+    fn test_rotation() {
+        let circuit = MyCircuit(PhantomData);
+
+        let public_input = vec![Fr::from(1), Fr::from(2), Fr::from(1 << 8)];
+
+        let k = 7;
+        let prover = MockProver::run(k, &circuit, vec![public_input.clone()]).unwrap();
+        prover.assert_satisfied();
+
+        let mut rng = seeded_std_rng();
+        let params = ParamsKZG::<Bn256>::setup(k, &mut rng);
+
+        let vk = keygen_vk(&params, &circuit).unwrap();
+        let pk = keygen_pk(&params, vk.clone(), &circuit).unwrap();
+        let generator = SolidityGenerator::new(
+            &params,
+            &vk,
+            halo2_solidity_verifier::BatchOpenScheme::Bdfg21,
+            public_input.len(),
+        );
+        let (verifier_solidity, vk_solidity) = generator.render_separately().unwrap();
+        save_solidity(format!("Halo2VerifyingArtifact-{k}.sol"), &vk_solidity);
+
+        let vk_creation_code = compile_solidity(&vk_solidity);
+        let mut evm = Evm::default();
+        let (vk_address, _) = evm.create(vk_creation_code);
+
+        let verifier_creation_code = compile_solidity(&verifier_solidity);
+        let verifier_creation_code_size = verifier_creation_code.len();
+        println!("Verifier creation code size: {verifier_creation_code_size}");
+
+        let (verifier_address, _) = evm.create(verifier_creation_code);
+
+        let calldata = {
+            let proof = create_proof_checked(&params, &pk, circuit, &public_input, &mut rng);
+            encode_calldata(Some(vk_address.into()), &proof, &public_input)
+        };
+        let (gas_cost, output) = evm.call(verifier_address, calldata);
+        assert_eq!(output, [vec![0; 31], vec![1]].concat());
+        println!("Gas cost of verifying standard Plonk with 2^{k} rows: {gas_cost}");
     }
 }
