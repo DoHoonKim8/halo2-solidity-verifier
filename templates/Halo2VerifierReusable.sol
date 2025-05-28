@@ -566,6 +566,7 @@ contract Halo2VerifierReusable {
             }
 
             function coeff_computations(coeff_len_data, coeff_data) -> ret {
+                // `coeff_len` is the number of rotations inside the RotationSet
                 let coeff_len := and(coeff_len_data, BYTE_FLAG_BITMASK)
                 ret := shr(8, coeff_len_data)
                 switch coeff_len
@@ -586,13 +587,16 @@ contract Halo2VerifierReusable {
                                 continue
                             } 
                             if first {
+                                // coeff = x_i - x_j
                                 coeff := addmod(point_i, sub(R, mload(and(shr(mul(j, 16), coeff_data), PTR_BITMASK))), R)
                                 first := 0
                                 continue
                             } 
+                            // coeff is \prod_{j = 0, j \neq i}^n (x_i - x_j)
                             coeff := mulmod(coeff, addmod(point_i, sub(R, mload(and(shr(mul(j, 16), coeff_data), PTR_BITMASK))), R), R)
                         }
                         offset_base := add(offset_base, offset_aggr)
+                        // coeff *= (u - x_i)
                         coeff := mulmod(coeff, mload(and(shr(offset_base, coeff_data), PTR_BITMASK)), R)
                         offset_base := add(offset_base, offset_aggr)
                         mstore(and(shr(offset_base, coeff_data), PTR_BITMASK), coeff)
@@ -696,6 +700,7 @@ contract Halo2VerifierReusable {
                                     lt(mptr_end, mptr)
                                     { mptr := sub(mptr, 0x40) }
                                 {                      
+                                    // computing \sum_{j} y^{j-1} \cdot cm_{i,j}
                                     success := ec_mul_acc(success, mload(add(theta_mptr, 0xA0)))
                                     success := ec_add_acc(success, mload(mptr), mload(add(mptr, 0x20)))
                                 }
@@ -1236,6 +1241,7 @@ contract Halo2VerifierReusable {
                     let mu := mload(add(theta_mptr, 0xE0))
                     let vanishing_computations := mload(pcs_ptr)
                     mstore(0x20, 1)
+                    // store (\mu - x)
                     for
                         {
                             let mptr := and(vanishing_computations, PTR_BITMASK)
@@ -1250,6 +1256,7 @@ contract Halo2VerifierReusable {
                             point_mptr := add(point_mptr, 0x20)
                         }
                     {
+                        // store (\mu-x)
                         mstore(mptr, addmod(mu, sub(R, mload(point_mptr)), R))
                     }
                     pop(mu)
@@ -1258,6 +1265,7 @@ contract Halo2VerifierReusable {
                     vanishing_computations := shr(8, vanishing_computations)
                     let s := mload(and(vanishing_computations, PTR_BITMASK))
                     vanishing_computations := shr(16, vanishing_computations)
+                    // computing s = Z_{S_0}(u) = (u-x_{0,0}) ... (u-x_{0,n-1})
                     for { let i } lt(i, num_words) { i := add(i, 1) } {
                         for {  } vanishing_computations {  } {
                             s := mulmod(s, mload(and(vanishing_computations, PTR_BITMASK)), R)
@@ -1266,6 +1274,7 @@ contract Halo2VerifierReusable {
                         pcs_ptr := add(pcs_ptr, 0x20)
                         vanishing_computations := mload(pcs_ptr)
                     }
+                    // vanishing_0_mptr
                     let diff_ptr := and(vanishing_computations, PTR_BITMASK)
                     mstore(diff_ptr, s)
                     vanishing_computations := shr(16, vanishing_computations)
@@ -1276,6 +1285,7 @@ contract Halo2VerifierReusable {
                     for { let i := 0 } lt(i, sets_len) { i := add(i, 1) } {
                         diff := mload(and(vanishing_computations, PTR_BITMASK))
                         vanishing_computations := shr(16, vanishing_computations)
+                        // computing Z_{T\S_i}(u)
                         for { } vanishing_computations { } {
                             diff := mulmod(diff, mload(and(vanishing_computations, PTR_BITMASK)), R)
                             vanishing_computations := shr(16, vanishing_computations)
@@ -1333,6 +1343,7 @@ contract Halo2VerifierReusable {
                     let r_evals_meta_data := mload(pcs_ptr)
                     let end_ptr_packed_lens := add(pcs_ptr, mul(0x20, and(r_evals_meta_data, BYTE_FLAG_BITMASK)))
                     r_evals_meta_data := shr(8, r_evals_meta_data)
+                    // diff_mptr + 0x20
                     let set_coeff := and(r_evals_meta_data, PTR_BITMASK)
                     r_evals_meta_data := shr(16, r_evals_meta_data)
                     let r_eval_mptr := and(r_evals_meta_data, PTR_BITMASK)
@@ -1345,7 +1356,13 @@ contract Halo2VerifierReusable {
                     let r_eval
                     for {  } lt(i, end_ptr_packed_lens) { i := add(i, 0x20) } {
                         for {  } r_evals_meta_data { } {
-                            r_eval, pcs_ptr := r_evals_computation(and(r_evals_meta_data, BYTE_FLAG_BITMASK), pcs_ptr, zeta, quotient_eval, coeff_ptr)
+                            r_eval, pcs_ptr := r_evals_computation(
+                                and(r_evals_meta_data, BYTE_FLAG_BITMASK), // set.rots().len() * 0x20
+                                pcs_ptr,
+                                zeta,
+                                quotient_eval,
+                                coeff_ptr
+                            )
                             coeff_ptr := add(coeff_ptr, and(r_evals_meta_data, BYTE_FLAG_BITMASK))
                             r_evals_meta_data := shr(8, r_evals_meta_data)
                             if not_first {
@@ -1372,10 +1389,12 @@ contract Halo2VerifierReusable {
                             let sum := mload(coeff_ptr) 
                             let len := and(coeff_sums_data, BYTE_FLAG_BITMASK)
                             coeff_sums_data := shr(8, coeff_sums_data)
+                            // computing 1 / Z_{S_i}(u)
                             for { let j := 0x20 } lt(j, len) { j := add(j, 0x20) } {
                                 sum := addmod(sum, mload(add(coeff_ptr, j)), R)
                             }
                             coeff_ptr := add(coeff_ptr, len)
+                            // store 1 / Z_{S_i}(u) to sum_mptr
                             mstore(and(coeff_sums_data, PTR_BITMASK), sum)
                             coeff_sums_data := shr(16, coeff_sums_data)
                         }
@@ -1386,6 +1405,7 @@ contract Halo2VerifierReusable {
                 // r_eval_computation
                 {
                     let r_eval_data := mload(pcs_ptr)
+                    // second_batch_invert_end
                     let mptr_end := and(r_eval_data, PTR_BITMASK)                    
                     for
                         {
@@ -1402,8 +1422,11 @@ contract Halo2VerifierReusable {
                         mstore(mptr, mload(sum_mptr))
                     }
                     r_eval_data := shr(16, r_eval_data)
+                    // obtain Z_{S_i}(u)
                     success := batch_invert(success, 0, mptr_end)
+
                     let r_eval_ptr := and(r_eval_data, PTR_BITMASK)
+                    // Z_{S_k}(u) * r_eval
                     let r_eval := mulmod(mload(sub(mptr_end, 0x20)), mload(r_eval_ptr), R)
                     r_eval_data := shr(16, r_eval_data)
                     for
@@ -1421,6 +1444,7 @@ contract Halo2VerifierReusable {
                         r_eval := mulmod(r_eval, mload(add(theta_mptr, 0xC0)), R)
                         r_eval := addmod(r_eval, mulmod(mload(sum_inv_mptr), mload(r_eval_mptr), R), R)
                     }
+                    // r_eval = \sum_{i \in [k]} v^{i-1} \cdot r_eval
                     mstore(add(theta_mptr, 0x2A0), r_eval)
                     pcs_ptr := add(pcs_ptr, 0x20)
                 }
@@ -1430,8 +1454,10 @@ contract Halo2VerifierReusable {
                     let pairing_input_meta_data := mload(pcs_ptr)
                     let end_ptr_packed_lens := add(pcs_ptr, mul(0x20, and(pairing_input_meta_data, BYTE_FLAG_BITMASK)))
                     pairing_input_meta_data := shr(8, pairing_input_meta_data)
+                    // diff_mptr + 0x20
                     let set_coeff := and(pairing_input_meta_data, PTR_BITMASK)
                     pairing_input_meta_data := shr(16, pairing_input_meta_data)
+                    // w'.y || w'.x || vanishing_0 || w.y || w.x
                     let ec_points_cptr_packed := and(pairing_input_meta_data, 0xFFFFFFFFFFFFFFFFFFFF)
                     pairing_input_meta_data := shr(80, pairing_input_meta_data)
                     let i := pcs_ptr
@@ -1443,14 +1469,24 @@ contract Halo2VerifierReusable {
                             pairing_input_meta_data := shr(8, pairing_input_meta_data)
                             if first {
                                 first := 0
-                                success := pairing_input_computations_first(len, pcs_ptr, mload(pcs_ptr), theta_mptr, success)
+                                // store \sum_{j} y^{j-1} \cdot cm_{i,j} in [0x00, 0x20]
+                                success := pairing_input_computations_first(
+                                    len, // `len` is the number of packed words for the first set
+                                    pcs_ptr,
+                                    mload(pcs_ptr),
+                                    theta_mptr,
+                                    success
+                                )
                                 pcs_ptr := add(pcs_ptr, len)
                                 continue
                             }
+                            // store \sum_{j} y^{j-1} \cdot cm_{i,j} in [0x80, 0xa0]
                             success := pairing_input_computations(len, pcs_ptr, mload(pcs_ptr), theta_mptr, success)
                             pcs_ptr := add(pcs_ptr, len)
+                            // scale the point in [0x80, 0xa0] by v^{i-1} * `set_coeff`
                             success := ec_mul_tmp(success, mulmod(nu, mload(set_coeff), R))
                             set_coeff := add(set_coeff, 0x20)
+                            // add the point in [0x80, 0xa0] to the point in [0x00, 0x20]
                             success := ec_add_acc(success, mload(0x80), mload(0xa0))
                             // execute this if statement if not the last set
                             if or(0x1, lt(i, sub(end_ptr_packed_lens, 0x20))) {
@@ -1461,24 +1497,34 @@ contract Halo2VerifierReusable {
                     }
                     mstore(0x80, mload(add(vk_mptr, {{ vk_const_offsets["g1_x"]|hex() }})))
                     mstore(0xa0, mload(add(vk_mptr, {{ vk_const_offsets["g1_y"]|hex() }})))
+                    // store -[r_eval]_1 to [0x80, 0xa0]
                     success := ec_mul_tmp(success, sub(R, mload(add(theta_mptr, 0x2A0))))
+                    // add -[r_eval]_1 to [0x00, 0x20]
                     success := ec_add_acc(success, mload(0x80), mload(0xa0))
+                    // store w.x to 0x80
                     mstore(0x80, calldataload(and(ec_points_cptr_packed, PTR_BITMASK)))
                     ec_points_cptr_packed := shr(16, ec_points_cptr_packed)
+                    // store w.y to 0xa0
                     mstore(0xa0, calldataload(and(ec_points_cptr_packed, PTR_BITMASK)))
                     ec_points_cptr_packed := shr(16, ec_points_cptr_packed)
+                    // multiply -Z_{S_0}(u) to [0x80, 0xa0]
                     success := ec_mul_tmp(success, sub(R, mload(and(ec_points_cptr_packed, PTR_BITMASK))))
                     ec_points_cptr_packed := shr(16, ec_points_cptr_packed)
+                    // add -Z_{S_0}(u) * W to [0x00, 0x20]
                     success := ec_add_acc(success, mload(0x80), mload(0xa0))
                     let w_prime_x := calldataload(and(ec_points_cptr_packed, PTR_BITMASK))
                     ec_points_cptr_packed := shr(16, ec_points_cptr_packed)
                     let w_prime_y := calldataload(and(ec_points_cptr_packed, PTR_BITMASK))
                     mstore(0x80, w_prime_x)
                     mstore(0xa0, w_prime_y)
+                    // multiply u to [0x80, 0xa0]
                     success := ec_mul_tmp(success, mload(add(theta_mptr, 0xE0)))
+                    // add u * W' to [0x00, 0x20]
                     success := ec_add_acc(success, mload(0x80), mload(0xa0))
+                    // store the first pairing input to [0x2C0, 0x2E0]
                     mstore(add(theta_mptr, 0x2C0), mload(0x00))
                     mstore(add(theta_mptr, 0x2E0), mload(0x20))
+                    // store the second pairing input to [0x300, 0x320]
                     mstore(add(theta_mptr, 0x300), w_prime_x)
                     mstore(add(theta_mptr, 0x320), w_prime_y)
                 }
