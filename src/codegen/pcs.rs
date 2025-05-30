@@ -1073,7 +1073,7 @@ pub(crate) fn bdfg21_computations_dynamic(
              bit_counter: &mut usize,
              last_idx: &mut usize| {
                 for evals in set.evals().iter().rev() {
-                    let offset = coeffs.len() * 16;
+                    let offset = evals.len() * 16; // ???
                     let next_bit_counter = *bit_counter + offset;
 
                     if next_bit_counter > 256 {
