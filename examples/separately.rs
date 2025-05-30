@@ -265,20 +265,20 @@ mod rotation_tests {
     use crate::{create_proof_checked, prelude::seeded_std_rng};
 
     #[derive(Debug, Clone)]
-    struct FactorialConfig {
+    struct Config {
         advice: Column<Advice>,
-        selector: Selector,
+        eq_selector: Selector,
         instance: Column<Instance>,
     }
 
     #[derive(Debug, Clone)]
-    struct FactorialChip<F: Field> {
-        config: FactorialConfig,
+    struct Chip<F: Field> {
+        config: Config,
         _marker: PhantomData<F>,
     }
 
-    impl<F: Field> FactorialChip<F> {
-        pub fn construct(config: FactorialConfig) -> Self {
+    impl<F: Field> Chip<F> {
+        pub fn construct(config: Config) -> Self {
             Self {
                 config,
                 _marker: PhantomData,
@@ -289,82 +289,46 @@ mod rotation_tests {
             meta: &mut ConstraintSystem<F>,
             advice: Column<Advice>,
             instance: Column<Instance>,
-        ) -> FactorialConfig {
-            let selector = meta.selector();
+        ) -> Config {
+            let eq_selector = meta.selector();
 
             meta.enable_equality(advice);
             meta.enable_equality(instance);
 
-            meta.create_gate("add", |meta| {
+            meta.create_gate("eq", |meta| {
                 //
                 // advice | selector
-                //   a    |
-                //   b    |    s
-                //   c    |
-                //
-                let s = meta.query_selector(selector);
-                let a = meta.query_advice(advice, Rotation::prev());
-                let b = meta.query_advice(advice, Rotation::cur());
-                let c = meta.query_advice(advice, Rotation::next());
-                vec![s * (c - a * b)]
+                //   a    |    s
+                let s = meta.query_selector(eq_selector);
+                let a = meta.query_advice(advice, Rotation::cur());
+                let a_prime = meta.query_advice(advice, Rotation(1 << 5));
+                vec![s * (a - a_prime)]
             });
 
-            FactorialConfig {
+            Config {
                 advice,
-                selector,
+                eq_selector,
                 instance,
             }
         }
 
-        pub fn assign(
-            &self,
-            mut layouter: impl Layouter<F>,
-            nrows: usize,
-        ) -> Result<AssignedCell<F, F>, Error> {
+        pub fn assign(&self, mut layouter: impl Layouter<F>, nrows: usize) -> Result<(), Error> {
             layouter.assign_region(
-                || "factorial",
+                || "",
                 |mut region| {
-                    let mut a_cell = region.assign_advice_from_instance(
-                        || "",
-                        self.config.instance,
-                        0,
-                        self.config.advice,
-                        0,
-                    )?;
-
-                    let mut b_cell = region.assign_advice_from_instance(
-                        || "",
-                        self.config.instance,
-                        1,
-                        self.config.advice,
-                        1,
-                    )?;
-
-                    for row in 1..nrows - 1 {
-                        self.config.selector.enable(&mut region, row)?;
-                        let c_cell = region.assign_advice(
+                    for row in 0..nrows {
+                        self.config.eq_selector.enable(&mut region, row)?;
+                        region.assign_advice_from_instance(
                             || "advice",
+                            self.config.instance,
+                            row,
                             self.config.advice,
-                            row + 1,
-                            || a_cell.value().copied() * b_cell.value(),
+                            row,
                         )?;
-
-                        a_cell = b_cell;
-                        b_cell = c_cell;
                     }
-
-                    Ok(b_cell)
+                    Ok(())
                 },
             )
-        }
-
-        pub fn expose_public(
-            &self,
-            mut layouter: impl Layouter<F>,
-            cell: AssignedCell<F, F>,
-            row: usize,
-        ) -> Result<(), Error> {
-            layouter.constrain_instance(cell.cell(), self.config.instance, row)
         }
     }
 
@@ -372,7 +336,7 @@ mod rotation_tests {
     struct MyCircuit<F>(PhantomData<F>);
 
     impl<F: Field> Circuit<F> for MyCircuit<F> {
-        type Config = FactorialConfig;
+        type Config = Config;
         type FloorPlanner = SimpleFloorPlanner;
 
         fn without_witnesses(&self) -> Self {
@@ -382,7 +346,7 @@ mod rotation_tests {
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
             let advice = meta.advice_column();
             let instance = meta.instance_column();
-            FactorialChip::configure(meta, advice, instance)
+            Chip::configure(meta, advice, instance)
         }
 
         fn synthesize(
@@ -390,13 +354,8 @@ mod rotation_tests {
             config: Self::Config,
             mut layouter: impl Layouter<F>,
         ) -> Result<(), Error> {
-            let chip = FactorialChip::construct(config);
-
-            let nrows = 7;
-            let out_cell = chip.assign(layouter.namespace(|| "entire table"), nrows)?;
-
-            chip.expose_public(layouter.namespace(|| "out"), out_cell, 2)?;
-
+            let chip = Chip::construct(config);
+            chip.assign(layouter.namespace(|| "entire table"), 1 << 4)?;
             Ok(())
         }
     }
@@ -415,9 +374,9 @@ mod rotation_tests {
     fn test_rotation() {
         let circuit = MyCircuit(PhantomData);
 
-        let public_input = vec![Fr::from(1), Fr::from(2), Fr::from(1 << 8)];
+        let public_input = vec![Fr::from(1); 1 << 4];
 
-        let k = 7;
+        let k = 5;
         let prover = MockProver::run(k, &circuit, vec![public_input.clone()]).unwrap();
         prover.assert_satisfied();
 
@@ -452,5 +411,52 @@ mod rotation_tests {
         let (gas_cost, output) = evm.call(verifier_address, calldata);
         assert_eq!(output, [vec![0; 31], vec![1]].concat());
         println!("Gas cost of verifying standard Plonk with 2^{k} rows: {gas_cost}");
+    }
+
+    #[test]
+    fn test_rotation_og_verifier() {
+        const VERIFIER_WRAPPER_SOLIDITY: &str = include_str!("../contracts/VerifierWrapper.sol");
+        let circuit = MyCircuit(PhantomData);
+
+        let public_input = vec![Fr::from(1); 1 << 4];
+
+        let k = 7;
+        let prover = MockProver::run(k, &circuit, vec![public_input.clone()]).unwrap();
+        prover.assert_satisfied();
+
+        let mut rng = seeded_std_rng();
+        let params = ParamsKZG::<Bn256>::setup(k, &mut rng);
+
+        let vk = keygen_vk(&params, &circuit).unwrap();
+        let pk = keygen_pk(&params, vk.clone(), &circuit).unwrap();
+        let generator = SolidityGenerator::new(
+            &params,
+            &vk,
+            halo2_solidity_verifier::BatchOpenScheme::Bdfg21,
+            public_input.len(),
+        )
+        .set_acc_encoding(None);
+        let verifier_solidity = generator.render().unwrap();
+        let verifier_creation_code = compile_solidity(verifier_solidity);
+        let verifier_creation_code_size = verifier_creation_code.len();
+
+        // compile the solidity file located at contracts/VerifierWrapper.sol
+        let verifier_wrapper_creation_code = compile_solidity(VERIFIER_WRAPPER_SOLIDITY);
+
+        let mut evm = Evm::unlimited();
+        let (verifier_address, gas_cost) = evm.create(verifier_creation_code);
+        let verifier_wrapper_address = evm.create(verifier_wrapper_creation_code).0;
+        let verifier_runtime_code_size = evm.code_size(verifier_address);
+
+        println!("Verifier creation code size: {verifier_creation_code_size}");
+        println!("Verifier runtime code size: {verifier_runtime_code_size}");
+        println!("Gas deployment cost verifier: {gas_cost}");
+
+        let proof = create_proof_checked(&params, &pk, circuit, &public_input, &mut rng);
+
+        let (gas_cost, output) =
+            evm.call(verifier_address, encode_calldata(None, &proof, &public_input));
+        assert_eq!(output, [vec![0; 31], vec![1]].concat());
+        println!("Gas cost conjoined: {gas_cost}");
     }
 }
