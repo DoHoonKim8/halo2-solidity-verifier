@@ -545,6 +545,12 @@ contract Halo2VerifierReusable {
                 let values_max_rot := and(pcs_computations, BYTE_FLAG_BITMASK)
                 pcs_computations := shr(8, pcs_computations)
                 for { let i := 0 } lt(i, values_max_rot) { i := add(i, 1) } {
+                    word_shift := add(word_shift, 16)
+                    if gt(word_shift, 256) {
+                        word_shift := 16
+                        pcs_ptr := add(pcs_ptr, 0x20)
+                        pcs_computations := mload(pcs_ptr)
+                    }
                     let value := and(pcs_computations, PTR_BITMASK)
                     if not(eq(value, 0)) {
                         mstore(value, x_pow_of_omega)
@@ -553,13 +559,7 @@ contract Halo2VerifierReusable {
                         break
                     }
                     x_pow_of_omega := mulmod(x_pow_of_omega, omega, R)
-                    word_shift := add(word_shift, 16)
                     pcs_computations := shr(16, pcs_computations)
-                    if eq(word_shift, 256) {
-                        word_shift := 0
-                        pcs_ptr := add(pcs_ptr, 0x20)
-                        pcs_computations := mload(pcs_ptr)
-                    }
                 }
                 ret0 := x_pow_of_omega
                 ret1 := pcs_ptr 
@@ -1521,10 +1521,10 @@ contract Halo2VerifierReusable {
                     success := ec_mul_tmp(success, mload(add(theta_mptr, 0xE0)))
                     // add u * W' to [0x00, 0x20]
                     success := ec_add_acc(success, mload(0x80), mload(0xa0))
-                    // store the first pairing input to [0x2C0, 0x2E0]
+                    // store the first pairing input to [theta_mptr + 0x2C0, theta_mptr + 0x2E0]
                     mstore(add(theta_mptr, 0x2C0), mload(0x00))
                     mstore(add(theta_mptr, 0x2E0), mload(0x20))
-                    // store the second pairing input to [0x300, 0x320]
+                    // store the second pairing input to [theta_mptr + 0x300, theta_mptr + 0x320]
                     mstore(add(theta_mptr, 0x300), w_prime_x)
                     mstore(add(theta_mptr, 0x320), w_prime_y)
                 }
