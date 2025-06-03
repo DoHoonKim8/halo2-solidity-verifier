@@ -718,6 +718,8 @@ impl<'a> SolidityGenerator<'a> {
                 );
 
                 let expression_eval_computations = evaluator.quotient_eval_fsm_usage();
+                println!("expression_eval_computations  {expression_eval_computations}");
+                println!("fsm_usage : {fsm_usage}");
                 itertools::max([fsm_usage, expression_eval_computations]).unwrap()
             }
             _ => fsm_usage,

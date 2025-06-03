@@ -7,7 +7,7 @@ use halo2_solidity_verifier::{
     SolidityGenerator,
 };
 
-const K_RANGE: Range<u32> = 13..14;
+const K_RANGE: Range<u32> = 11..12;
 
 fn main() {
     let mut rng = seeded_std_rng();
@@ -299,10 +299,13 @@ mod rotation_tests {
                 //
                 // advice | selector
                 //   a    |    s
+                //  ...   |
+                //   a'   |
                 let s = meta.query_selector(eq_selector);
                 let a = meta.query_advice(advice, Rotation::cur());
-                let a_prime = meta.query_advice(advice, Rotation(1 << 5));
-                vec![s * (a - a_prime)]
+                let a_prime = meta.query_advice(advice, Rotation((1 << 5) - 1));
+                let constant = Expression::Constant(F::ONE + F::ONE);
+                vec![s * constant * (a - a_prime)]
             });
 
             Config {
@@ -316,8 +319,8 @@ mod rotation_tests {
             layouter.assign_region(
                 || "",
                 |mut region| {
+                    self.config.eq_selector.enable(&mut region, 0)?;
                     for row in 0..nrows {
-                        self.config.eq_selector.enable(&mut region, row)?;
                         region.assign_advice_from_instance(
                             || "advice",
                             self.config.instance,
@@ -355,7 +358,7 @@ mod rotation_tests {
             mut layouter: impl Layouter<F>,
         ) -> Result<(), Error> {
             let chip = Chip::construct(config);
-            chip.assign(layouter.namespace(|| "entire table"), 1 << 4)?;
+            chip.assign(layouter.namespace(|| ""), 1 << 6)?;
             Ok(())
         }
     }
@@ -374,9 +377,9 @@ mod rotation_tests {
     fn test_rotation() {
         let circuit = MyCircuit(PhantomData);
 
-        let public_input = vec![Fr::from(1); 1 << 4];
+        let public_input = vec![Fr::from(1); 1 << 6];
 
-        let k = 5;
+        let k = 7;
         let prover = MockProver::run(k, &circuit, vec![public_input.clone()]).unwrap();
         prover.assert_satisfied();
 
@@ -418,7 +421,7 @@ mod rotation_tests {
         const VERIFIER_WRAPPER_SOLIDITY: &str = include_str!("../contracts/VerifierWrapper.sol");
         let circuit = MyCircuit(PhantomData);
 
-        let public_input = vec![Fr::from(1); 1 << 4];
+        let public_input = vec![Fr::from(1); 1 << 5];
 
         let k = 7;
         let prover = MockProver::run(k, &circuit, vec![public_input.clone()]).unwrap();

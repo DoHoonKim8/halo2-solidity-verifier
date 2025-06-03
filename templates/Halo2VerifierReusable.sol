@@ -883,8 +883,6 @@ contract Halo2VerifierReusable {
                 }
                 
                 for { let i := 0 } lt(i, num_words) { i := add(i, 1) } {
-                    // loops until challenge_len_data becomes 0 -> this seems vague termination
-                    // what happens if the valid data ends 8 bits behind the MSG byte of the words?
                     for { } challenge_len_data { } {
                         // add proof_cpt to num advices len
                         let proof_cptr_end := add(proof_cptr, and(challenge_len_data, PTR_BITMASK))

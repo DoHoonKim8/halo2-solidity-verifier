@@ -39,6 +39,7 @@ pub(crate) struct ConstraintSystemMeta {
 pub(crate) struct ConstraintSystemMeta {
     pub(crate) num_fixeds: usize,
     pub(crate) permutation_columns: Vec<Column<Any>>,
+    /// the length of each permutation set
     pub(crate) permutation_chunk_len: usize,
     pub(crate) num_lookup_permuteds: usize,
     pub(crate) num_permutation_zs: usize,
@@ -378,7 +379,9 @@ pub(crate) struct Data {
     pub(crate) advice_evals: HashMap<(usize, i32), Word>,
     pub(crate) fixed_evals: HashMap<(usize, i32), Word>,
     pub(crate) random_eval: Word,
+    /// Evaluations of permutation polynomials s_i(X)
     pub(crate) permutation_evals: HashMap<Column<Any>, Word>,
+    /// Z_P(X), Z_P(\omega X), Z_P(\omega^u X)
     pub(crate) permutation_z_evals: Vec<(Word, Word, Word)>,
     pub(crate) lookup_evals: Vec<(Word, Word, Word, Word, Word)>,
 

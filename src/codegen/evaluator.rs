@@ -804,14 +804,14 @@ where
         let lookups: Vec<LookupEncoded> = izip!(input_tables, &self.data.lookup_evals)
             .enumerate()
             .map(|(lookup_index, (input_table, evals))| {
-                let (table_lines, inputs) = input_table;
+                let (table_lines, input_lines) = input_table;
                 let evals = self.encode_quintuple_evaluation_word(evals, 8);
                 let mut inner_accumulator = 0;
-                let inputs: Vec<InputsEncoded> = inputs
+                let inputs: Vec<InputsEncoded> = input_lines
                     .iter()
-                    .map(|input_lines| {
+                    .map(|input_line| {
                         let res = InputsEncoded {
-                            expression: vec![input_lines.clone()],
+                            expression: vec![input_line.clone()],
                             acc: inner_accumulator,
                         };
                         inner_accumulator += 1;
@@ -1178,6 +1178,7 @@ where
         *self.static_mem_ptr.borrow_mut() = value;
     }
 
+    /// returns (vector of encoded expressions, the position of encoded expression inside free static memory area)
     fn evaluate_encode(&self, expression: &Expression<F>) -> (Vec<U256>, U256) {
         evaluate(
             expression,
@@ -1270,7 +1271,11 @@ where
                         println!("Key not found: {}", value);
                         0 // Default value, you can change this if needed
                     },
-                    |entry| entry.value().as_usize(),
+                    |entry| {
+                        println!("value : {}", value);
+                        println!("constant expression address : {:?}", entry.value().as_usize());
+                        entry.value().as_usize()
+                    },
                 )),
             ),
             OperandMem::Instance | OperandMem::Challenge => (vec![], value),

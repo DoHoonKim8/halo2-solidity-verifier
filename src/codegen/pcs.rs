@@ -127,9 +127,12 @@ pub(crate) fn queries(meta: &ConstraintSystemMeta, data: &Data) -> Vec<Query> {
 
 #[derive(Debug)]
 pub(crate) struct RotationSet {
+    /// x_1, x_2, x_3
     rots: BTreeSet<i32>,
     diffs: BTreeSet<i32>,
+    /// f_1, f_2
     comms: Vec<EcPoint>,
+    /// [[f_1(x_1), f_1(x_2)], [f_2(x_1), f_2(x_2)]]
     evals: Vec<Vec<Word>>,
 }
 
@@ -229,6 +232,7 @@ pub(crate) fn bdfg21_computations_static(
 
     let first_batch_invert_end = diff_0.ptr() + 1 + num_coeffs;
     let second_batch_invert_end = diff_0.ptr() + sets.len();
+    // space for `batch_invert` algorithm
     let free_mptr = diff_0.ptr() + 2 * (1 + num_coeffs) + 6;
 
     let point_mptr = free_mptr;
@@ -741,7 +745,6 @@ pub(crate) fn bdfg21_computations_dynamic(
                 packed_words[last_idx] |= *point << bit_counter;
                 bit_counter += 16;
             }
-
             packed_words
         };
         let max_rot_computations = (1..=max_rot)
@@ -783,7 +786,7 @@ pub(crate) fn bdfg21_computations_dynamic(
             // start packing the mptrs
             packed_words[0] |= mptr_word;
             packed_words[0] |= mptr_end_word << 16;
-            packed_words[0] |= U256::from(free_mptr.value().as_usize()) << 32;
+            packed_words[0] |= U256::from(point_mptr.value().as_usize()) << 32;
             // bit offset length to where the number of words allocated to the s_ptrs will be stored.
             let words_alloc_offset = 48;
             let mut bit_counter = words_alloc_offset + 8;
