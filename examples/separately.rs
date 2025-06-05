@@ -1,4 +1,5 @@
 use application::StandardPlonk;
+use itertools::Itertools;
 use prelude::*;
 
 use halo2_proofs::poly::commitment::Params;
@@ -45,7 +46,7 @@ fn main() {
 
         let calldata = {
             let instances = circuit.instances();
-            let proof = create_proof_checked(&params[&k], &pk, circuit, &instances, &mut rng);
+            let proof = create_proof_checked(&params[&k], &pk, circuit, Some(&instances), &mut rng);
             encode_calldata(Some(vk_address.into()), &proof, &instances)
         };
         let (gas_cost, output) = evm.call(verifier_address, calldata);
@@ -75,7 +76,7 @@ fn create_proof_checked(
     params: &ParamsKZG<Bn256>,
     pk: &ProvingKey<G1Affine>,
     circuit: impl Circuit<Fr>,
-    instances: &[Fr],
+    instances: Option<&[Fr]>,
     mut rng: impl RngCore + Send + Sync,
 ) -> Vec<u8> {
     use halo2_proofs::{
@@ -86,13 +87,23 @@ fn create_proof_checked(
         transcript::TranscriptWriterBuffer,
     };
 
+    let instances = if let Some(instances) = instances {
+        vec![vec![instances]]
+    } else {
+        vec![vec![]]
+    };
+
     let proof = {
         let mut transcript = Keccak256Transcript::new(Vec::new());
         create_proof::<_, ProverSHPLONK<_>, _, _, _, _>(
             params,
             pk,
             &[circuit],
-            &[&[instances]],
+            instances
+                .iter()
+                .map(|v| v.as_slice())
+                .collect_vec()
+                .as_slice(),
             &mut rng,
             &mut transcript,
         )
@@ -106,7 +117,11 @@ fn create_proof_checked(
             params,
             pk.get_vk(),
             SingleStrategy::new(params),
-            &[&[instances]],
+            instances
+                .iter()
+                .map(|v| v.as_slice())
+                .collect_vec()
+                .as_slice(),
             &mut transcript,
             params.n(),
         )
@@ -253,7 +268,6 @@ mod rotation_tests {
         plonk::*,
         poly::{kzg::commitment::ParamsKZG, Rotation},
     };
-    use itertools::Itertools;
     use std::{
         fs::{create_dir_all, File},
         io::Write,
@@ -408,7 +422,7 @@ mod rotation_tests {
         let (verifier_address, _) = evm.create(verifier_creation_code);
 
         let calldata = {
-            let proof = create_proof_checked(&params, &pk, circuit, &public_input, &mut rng);
+            let proof = create_proof_checked(&params, &pk, circuit, Some(&public_input), &mut rng);
             encode_calldata(Some(vk_address.into()), &proof, &public_input)
         };
         let (gas_cost, output) = evm.call(verifier_address, calldata);
@@ -455,11 +469,254 @@ mod rotation_tests {
         println!("Verifier runtime code size: {verifier_runtime_code_size}");
         println!("Gas deployment cost verifier: {gas_cost}");
 
-        let proof = create_proof_checked(&params, &pk, circuit, &public_input, &mut rng);
+        let proof = create_proof_checked(&params, &pk, circuit, Some(&public_input), &mut rng);
 
-        let (gas_cost, output) =
-            evm.call(verifier_address, encode_calldata(None, &proof, &public_input));
+        let (gas_cost, output) = evm.call(
+            verifier_address,
+            encode_calldata(None, &proof, &public_input),
+        );
         assert_eq!(output, [vec![0; 31], vec![1]].concat());
         println!("Gas cost conjoined: {gas_cost}");
+    }
+}
+
+mod mv_lookup_tests {
+    use halo2_proofs::{
+        circuit::{Layouter, SimpleFloorPlanner, Value},
+        dev::MockProver,
+        halo2curves::{
+            bn256::{Bn256, Fr},
+            ff::PrimeField,
+        },
+        plonk::{
+            keygen_pk, keygen_vk, Advice, Circuit, Column, ConstraintSystem, Error, Expression,
+            Selector, TableColumn,
+        },
+        poly::{kzg::commitment::ParamsKZG, Rotation},
+    };
+    use halo2_solidity_verifier::{compile_solidity, encode_calldata, Evm, SolidityGenerator};
+    use itertools::Itertools;
+    use rand::{rngs::StdRng, RngCore, SeedableRng};
+
+    use crate::{create_proof_checked, save_solidity};
+
+    fn fe_to_bits_le<F: PrimeField>(fe: F) -> Vec<bool> {
+        let repr = fe.to_repr();
+        let bytes = repr.as_ref();
+        bytes
+            .iter()
+            .flat_map(|byte| {
+                let value = u8::from_le(*byte);
+                let mut bits = vec![];
+                for i in 0..8 {
+                    let mask = 1 << i;
+                    bits.push(value & mask > 0);
+                }
+                bits
+            })
+            .collect_vec()
+    }
+
+    pub fn usize_from_bits_le(bits: &[bool]) -> usize {
+        bits.iter()
+            .rev()
+            .fold(0, |int, bit| (int << 1) + (*bit as usize))
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct RangeCircuitConfig {
+        pub(crate) a1: Column<Advice>,
+        pub(crate) a2: Column<Advice>,
+        pub(crate) a3: Column<Advice>,
+        pub(crate) a4: Column<Advice>,
+        pub(crate) a5: Column<Advice>,
+        pub(crate) a6: Column<Advice>,
+        pub(crate) a7: Column<Advice>,
+        pub(crate) a8: Column<Advice>,
+        pub(crate) w: Column<Advice>,
+
+        pub(crate) t: TableColumn,
+        pub(crate) s_gate: Selector,
+        pub(crate) s_lookup: Selector,
+    }
+
+    pub struct RangeCircuit {
+        inputs: Vec<Fr>,
+    }
+
+    impl Circuit<Fr> for RangeCircuit {
+        type Config = RangeCircuitConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        fn without_witnesses(&self) -> Self {
+            Self { inputs: vec![] }
+        }
+
+        fn configure(meta: &mut ConstraintSystem<Fr>) -> Self::Config {
+            let a1 = meta.advice_column();
+            let a2 = meta.advice_column();
+            let a3 = meta.advice_column();
+            let a4 = meta.advice_column();
+            let a5 = meta.advice_column();
+            let a6 = meta.advice_column();
+            let a7 = meta.advice_column();
+            let a8 = meta.advice_column();
+            let w = meta.advice_column();
+            let s_gate = meta.selector();
+
+            let t = meta.lookup_table_column();
+            let s_lookup = meta.complex_selector();
+            meta.create_gate("composition", |meta| {
+                let a1 = meta.query_advice(a1, Rotation::cur());
+                let a2 = meta.query_advice(a2, Rotation::cur());
+                let a3 = meta.query_advice(a3, Rotation::cur());
+                let a4 = meta.query_advice(a4, Rotation::cur());
+                let a5 = meta.query_advice(a5, Rotation::cur());
+                let a6 = meta.query_advice(a6, Rotation::cur());
+                let a7 = meta.query_advice(a7, Rotation::cur());
+                let a8 = meta.query_advice(a8, Rotation::cur());
+
+                let w = meta.query_advice(w, Rotation::cur());
+                let s_gate = meta.query_selector(s_gate);
+
+                let composed = [a2, a3, a4, a5, a6, a7, a8].into_iter().enumerate().fold(
+                    a1,
+                    |acc, (i, expr)| {
+                        acc + expr * Expression::Constant(Fr::from_u128(1 << (16 * (i + 1))))
+                    },
+                );
+                vec![s_gate * (composed - w)]
+            });
+            for col in [a1, a2, a3, a4, a5, a6, a7, a8] {
+                meta.lookup("", |meta| {
+                    let selector = meta.query_selector(s_lookup);
+                    let value = meta.query_advice(col, Rotation::cur());
+                    vec![(selector * value, t)]
+                });
+            }
+            [a1, a2, a3, a4, a5, a6, a7, a8].map(|col| {
+                meta.enable_equality(col);
+            });
+            RangeCircuitConfig {
+                a1,
+                a2,
+                a3,
+                a4,
+                a5,
+                a6,
+                a7,
+                a8,
+                w,
+                s_gate,
+                t,
+                s_lookup,
+            }
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Fr>,
+        ) -> Result<(), Error> {
+            layouter.assign_region(
+                || "",
+                |mut region| {
+                    self.inputs.iter().enumerate().for_each(|(i, input)| {
+                        let input_bits = &fe_to_bits_le(input.clone())[..128];
+                        assert_eq!(
+                            Fr::from_u128(usize_from_bits_le(input_bits) as u128),
+                            *input
+                        );
+                        config.s_gate.enable(&mut region, i).unwrap();
+                        config.s_lookup.enable(&mut region, i).unwrap();
+                        region
+                            .assign_advice(|| "", config.w, i, || Value::known(*input))
+                            .unwrap();
+                        [
+                            config.a1, config.a2, config.a3, config.a4, config.a5, config.a6,
+                            config.a7, config.a8,
+                        ]
+                        .iter()
+                        .zip(input_bits.chunks(16))
+                        .map(|(col, limb)| {
+                            region.assign_advice(
+                                || "",
+                                *col,
+                                i,
+                                || Value::known(Fr::from(usize_from_bits_le(limb) as u64)),
+                            )
+                        })
+                        .collect::<Result<Vec<_>, Error>>()
+                        .unwrap();
+                    });
+
+                    Ok(())
+                },
+            )?;
+            layouter.assign_table(
+                || "",
+                |mut table| {
+                    let mut offset = 0;
+                    let table_values: Vec<Fr> = (0..1 << 16).map(|e| Fr::from(e as u64)).collect();
+                    for value in table_values.iter() {
+                        table.assign_cell(|| "", config.t, offset, || Value::known(*value))?;
+                        offset += 1;
+                    }
+                    Ok(())
+                },
+            )?;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_mv_lookup() {
+        let k = 17;
+        let mut rng = StdRng::from_seed(Default::default());
+        let inputs = vec![(); 1 << (k - 1)]
+            .iter()
+            .map(|_| {
+                let value = rng.next_u64();
+                Fr::from(value)
+            })
+            .collect_vec();
+        let circuit = RangeCircuit { inputs };
+        let prover = MockProver::run(k, &circuit, vec![]).unwrap();
+        prover.assert_satisfied();
+
+        let mut rng = StdRng::from_seed(Default::default());
+        let params = ParamsKZG::<Bn256>::setup(k, &mut rng);
+
+        let vk = keygen_vk(&params, &circuit).unwrap();
+        let pk = keygen_pk(&params, vk.clone(), &circuit).unwrap();
+        let generator = SolidityGenerator::new(
+            &params,
+            &vk,
+            halo2_solidity_verifier::BatchOpenScheme::Bdfg21,
+            0,
+        );
+        let (verifier_solidity, vk_solidity) = generator.render_separately().unwrap();
+        save_solidity(
+            format!("Halo2VerifyingArtifactMVLookup-{k}.sol"),
+            &vk_solidity,
+        );
+
+        let vk_creation_code = compile_solidity(&vk_solidity);
+        let mut evm = Evm::default();
+        let (vk_address, _) = evm.create(vk_creation_code);
+
+        let verifier_creation_code = compile_solidity(&verifier_solidity);
+        let verifier_creation_code_size = verifier_creation_code.len();
+        println!("Verifier creation code size: {verifier_creation_code_size}");
+
+        let (verifier_address, _) = evm.create(verifier_creation_code);
+
+        let calldata = {
+            let proof = create_proof_checked(&params, &pk, circuit, None, &mut rng);
+            encode_calldata(Some(vk_address.into()), &proof, &vec![])
+        };
+        let (gas_cost, output) = evm.call(verifier_address, calldata);
+        assert_eq!(output, [vec![0; 31], vec![1]].concat());
+        println!("Gas cost of verifying standard Plonk with 2^{k} rows: {gas_cost}");
     }
 }
